@@ -1,0 +1,80 @@
+pipeline {
+  environment {
+    registry = "registry-vpc.cn-hangzhou.aliyuncs.com"
+    registryCredential = 'docker-registry-user'
+    dockerImage = ''
+  }
+  
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    some-label: some-label-value
+spec:
+  containers:
+  - name: nodejs
+    image: node:15-alpine3.12
+    imagePullPolicy: IfNotPresent
+    command:
+    - cat
+    tty: true
+  - image: "jenkins/inbound-agent:4.3-4"
+    imagePullPolicy: IfNotPresent
+    name: "jnlp"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+    volumeMounts:
+    - mountPath: "/home/jenkins/agent"
+      name: "workspace-volume"
+      readOnly: false
+    - mountPath: /usr/bin/docker
+      name: volume-docker
+    - mountPath: /var/run/docker.sock
+      name: volume-dockersock
+  volumes:
+  - name: volume-docker
+    hostPath:
+      path: /usr/bin/docker
+  - name: volume-dockersock
+    hostPath:
+      path: /var/run/docker.sock
+"""
+    }
+  }
+  parameters {
+    gitParameter branchFilter: 'origin/(.*)', defaultValue: 'master', name: 'BRANCH', type: 'PT_BRANCH'
+  }
+  stages {
+    stage('isntall yarn') {
+      steps {
+        git branch: "${params.BRANCH}",  credentialsId: "readonly-pwd", url: "http://47.97.62.69/frontend/dsicm-admin-web.git"
+      }
+    }
+    stage('compile and pkg the project with yarn') {
+      steps {
+        container('nodejs') {
+          sh "yarn config set registry https://registry.npm.taobao.org"
+          sh "yarn install --ignore-engines"
+          sh "yarn build:dev"
+          sh "ls -l"
+        }
+      }
+    }
+    stage('build and push image') {
+      steps {
+        script {  
+          docker.withRegistry('http://registry-vpc.cn-hangzhou.aliyuncs.com', 'docker-registry-user') {
+            def customImage = docker.build("registry-vpc.cn-hangzhou.aliyuncs.com/dsicm_dev/front-admin-web:latest")
+            /* Push the container to the custom Registry */
+            customImage.push()
+          }
+        }
+      }    
+    }
+  }
+}
